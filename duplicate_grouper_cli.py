@@ -782,6 +782,246 @@ def get_class_name(cls_id, class_names):
 
 
 # ──────────────────────────────────────────────
+# 단계별 리포트 함수
+# ──────────────────────────────────────────────
+def _write_report_header(f, title, args, elapsed=None):
+    f.write("=" * 70 + "\n")
+    f.write(f"  {title}\n")
+    f.write("=" * 70 + "\n\n")
+    f.write(f"  실행 시각     : {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
+    f.write(f"  입력 디렉토리 : {args.input}\n")
+    f.write(f"  출력 디렉토리 : {args.output}\n")
+    f.write(f"  그룹화 방식   : {args.mode}\n")
+    if elapsed is not None:
+        f.write(f"  소요 시간     : {elapsed:.1f}초\n")
+    f.write("\n")
+
+
+def gen_report_background(groups, retry_groups, final_unique, hash_dict,
+                           out_dir, args, elapsed=None):
+    """배경 그룹화 단계 리포트 → report_background.txt"""
+    rp = Path(out_dir) / "report_background.txt"
+    total_in = sum(len(g) for g in groups + retry_groups) + len(final_unique)
+    n_groups  = len(groups)
+    n_retry   = len(retry_groups)
+    n_unique  = len(final_unique)
+    grouped_imgs  = sum(len(g) for g in groups)
+    retry_imgs    = sum(len(g) for g in retry_groups)
+    total_out     = n_groups + n_retry + n_unique
+
+    with open(rp, 'w', encoding='utf-8') as f:
+        _write_report_header(f, "배경(Background) 그룹화 리포트", args, elapsed)
+        f.write(f"  유사도 임계값 : {args.threshold}\n")
+        if getattr(args, 'retry', False):
+            f.write(f"  retry 임계값  : {args.retry_threshold}\n")
+        f.write("\n")
+        f.write("-" * 70 + "\n")
+        f.write(f"  입력 이미지       : {total_in:,}개\n\n")
+        f.write(f"  1차 그룹화\n")
+        f.write(f"    그룹 수         : {n_groups:,}개\n")
+        f.write(f"    그룹 내 이미지  : {grouped_imgs:,}개 → 대표 {n_groups:,}개 (그룹당 1장)\n")
+        f.write(f"    1차 unique      : {total_in - grouped_imgs:,}개\n")
+        if retry_groups:
+            f.write(f"\n  retry 그룹화\n")
+            f.write(f"    retry 그룹 수   : {n_retry:,}개\n")
+            f.write(f"    retry 내 이미지 : {retry_imgs:,}개 → 대표 {n_retry:,}개\n")
+            f.write(f"    최종 unique     : {n_unique:,}개\n")
+        else:
+            f.write(f"    최종 unique     : {n_unique:,}개\n")
+        f.write("\n")
+        f.write("-" * 70 + "\n")
+        f.write(f"  ※ 출력 (background_list.txt)\n")
+        f.write(f"    그룹 대표       : {n_groups + n_retry:,}개  ← background_list.txt 에 포함\n")
+        f.write(f"    unique 이미지   : {n_unique:,}개  ← label_list.txt 에 포함\n")
+        f.write(f"    합계 출력       : {total_out:,}개\n")
+        if total_in > 0:
+            f.write(f"    제거율          : {100.0 * (1 - total_out / total_in):.1f}%  "
+                    f"({total_in:,} → {total_out:,})\n")
+        f.write("\n")
+
+        if all_sizes := [len(g) for g in groups + retry_groups]:
+            f.write(f"  최대 그룹 크기  : {max(all_sizes):,}\n")
+            f.write(f"  평균 그룹 크기  : {sum(all_sizes)/len(all_sizes):.1f}\n\n")
+
+        f.write("  상위 20개 그룹 미리보기\n")
+        f.write("-" * 70 + "\n")
+        all_grps = groups[:20] + retry_groups[:max(0, 20 - len(groups))]
+        for idx, g in enumerate(all_grps, 1):
+            rep, dups = select_representative(g, hash_dict) if hash_dict else (g[0], g[1:])
+            nm = Path(rep).name
+            f.write(f"  [{idx:>3}] 대표: {nm:<52s} ({len(g)}장)\n")
+            for dup in dups[:5]:
+                f.write(f"        dup : {Path(dup).name}\n")
+            if len(dups) > 5:
+                f.write(f"        ... 외 {len(dups)-5}개\n")
+
+    logger.info(f"배경 리포트 저장: {rp}")
+
+
+def gen_report_label(class_data, bg_unique_count, out_dir, args, elapsed=None):
+    """
+    크롭(라벨) 그룹화 단계 리포트 → report_label.txt
+    class_data: {cls_name: {'groups', 'retry_groups', 'final_unique', 'hash_dict', 'total_crops'}}
+    bg_unique_count: int  (배경 unique 이미지 수)
+    """
+    rp = Path(out_dir) / "report_label.txt"
+
+    total_crops_all  = sum(d['total_crops'] for d in class_data.values())
+    total_groups_all = sum(len(d['groups']) + len(d['retry_groups']) for d in class_data.values())
+    total_unique_all = sum(len(d['final_unique']) for d in class_data.values())
+
+    # 크롭 그룹 대표 원본 이미지 수 (label_list.txt 기여분)
+    label_from_groups = sum(len(d['groups']) + len(d['retry_groups']) for d in class_data.values())
+    label_from_unique = sum(len(d['final_unique']) for d in class_data.values())
+
+    with open(rp, 'w', encoding='utf-8') as f:
+        _write_report_header(f, "크롭(Label) 그룹화 리포트", args, elapsed)
+        f.write(f"  크롭 임계값   : {getattr(args, 'crop_threshold', args.threshold)}\n")
+        if getattr(args, 'retry', False):
+            f.write(f"  retry 임계값  : {args.retry_threshold}\n")
+        f.write(f"  클래스 수     : {len(class_data)}개\n\n")
+
+        f.write("=" * 70 + "\n")
+        f.write("  클래스별 결과\n")
+        f.write("=" * 70 + "\n")
+
+        for cls_name, d in class_data.items():
+            g1    = d['groups']
+            rg    = d['retry_groups']
+            fuq   = d['final_unique']
+            total = d['total_crops']
+            g1_imgs  = sum(len(g) for g in g1)
+            rg_imgs  = sum(len(g) for g in rg)
+            total_out = len(g1) + len(rg) + len(fuq)
+
+            f.write(f"\n  [{cls_name}]\n")
+            f.write(f"    입력 크롭       : {total:,}개\n")
+            f.write(f"    1차 그룹        : {len(g1):,}개 그룹 / {g1_imgs:,}개 → 대표 {len(g1):,}개\n")
+            f.write(f"    1차 unique      : {total - g1_imgs:,}개\n")
+            if rg:
+                f.write(f"    retry 그룹      : {len(rg):,}개 그룹 / {rg_imgs:,}개 → 대표 {len(rg):,}개\n")
+                f.write(f"    최종 unique     : {len(fuq):,}개\n")
+            else:
+                f.write(f"    최종 unique     : {len(fuq):,}개\n")
+            if total > 0:
+                f.write(f"    크롭 제거율     : {100.0 * (1 - total_out / total):.1f}%  "
+                        f"({total:,} → {total_out:,})\n")
+
+        f.write("\n")
+        f.write("=" * 70 + "\n")
+        f.write("  전체 요약\n")
+        f.write("=" * 70 + "\n")
+        f.write(f"  전체 크롭 입력  : {total_crops_all:,}개\n")
+        f.write(f"  전체 그룹 수    : {total_groups_all:,}개\n")
+        f.write(f"  전체 unique 크롭: {total_unique_all:,}개\n\n")
+        f.write(f"  ※ label_list.txt 구성\n")
+        f.write(f"    크롭 그룹 대표  : {label_from_groups:,}개 원본 이미지\n")
+        f.write(f"    크롭 unique     : {label_from_unique:,}개 원본 이미지\n")
+        f.write(f"    배경 unique     : {bg_unique_count:,}개 원본 이미지\n")
+        f.write(f"    (중복 제거 후 label_list.txt 에 저장됨)\n")
+
+    logger.info(f"라벨 리포트 저장: {rp}")
+
+
+def gen_report_representative(cross_groups, cross_retry_groups, cross_unique,
+                               input_count, out_dir, args, elapsed=None):
+    """
+    대표 간 재그룹화 단계 리포트 → report_representative.txt
+    input_count: 재그룹화 전 입력 대표 크롭 수
+    """
+    rp = Path(out_dir) / "report_representative.txt"
+    n_groups = len(cross_groups)
+    n_retry  = len(cross_retry_groups)
+    n_unique = len(cross_unique)
+    grouped_imgs = sum(len(g) for g in cross_groups)
+    retry_imgs   = sum(len(g) for g in cross_retry_groups)
+    total_out    = n_groups + n_retry + n_unique
+
+    with open(rp, 'w', encoding='utf-8') as f:
+        _write_report_header(f, "대표(Representative) 간 재그룹화 리포트", args, elapsed)
+        f.write(f"  대표 임계값   : {getattr(args, 'rep_threshold', args.threshold)}\n\n")
+        f.write("-" * 70 + "\n")
+        f.write(f"  입력 대표 크롭    : {input_count:,}개  (label 단계 각 클래스 그룹 대표)\n\n")
+        f.write(f"  1차 재그룹화\n")
+        f.write(f"    그룹 수         : {n_groups:,}개\n")
+        f.write(f"    그룹 내 대표 수 : {grouped_imgs:,}개 → 최종 대표 {n_groups:,}개\n")
+        f.write(f"    1차 unique      : {input_count - grouped_imgs:,}개\n")
+        if cross_retry_groups:
+            f.write(f"\n  retry 재그룹화\n")
+            f.write(f"    retry 그룹 수   : {n_retry:,}개\n")
+            f.write(f"    retry 내 대표   : {retry_imgs:,}개 → 최종 대표 {n_retry:,}개\n")
+            f.write(f"    최종 unique     : {n_unique:,}개\n")
+        else:
+            f.write(f"    최종 unique     : {n_unique:,}개\n")
+        f.write("\n")
+        f.write("-" * 70 + "\n")
+        f.write(f"  ※ 출력 (representative_list.txt)\n")
+        f.write(f"    재그룹 대표     : {n_groups + n_retry:,}개 원본 이미지\n")
+        f.write(f"    unique          : {n_unique:,}개 원본 이미지\n")
+        f.write(f"    합계 출력       : {total_out:,}개\n")
+        if input_count > 0:
+            f.write(f"    추가 제거율     : {100.0 * (1 - total_out / input_count):.1f}%  "
+                    f"({input_count:,} → {total_out:,})\n")
+
+    logger.info(f"대표 리포트 저장: {rp}")
+
+
+def save_path_list(paths, out_dir, list_name, comment=""):
+    """단순 경로 목록 파일 저장."""
+    paths = sorted(set(paths))
+    list_path = Path(out_dir) / list_name
+    with open(list_path, 'w', encoding='utf-8') as f:
+        if comment:
+            f.write(f"# {comment}\n")
+        f.write(f"# 총 {len(paths):,}개\n")
+        f.write(f"# 생성: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
+        for p in paths:
+            f.write(f"{p}\n")
+    logger.info(f"목록 저장: {list_path} ({len(paths):,}개)")
+    return paths
+
+
+# ──────────────────────────────────────────────
+# 파이프라인 선택 인터랙티브
+# ──────────────────────────────────────────────
+PIPELINE_CHOICES = {
+    '1': 'bg_only',
+    '2': 'bg_label',
+    '3': 'bg_label_rep',
+}
+
+def prompt_pipeline(args_pipeline):
+    """
+    파이프라인 단계 선택 (CLI 인수 없을 경우 대화식 프롬프트).
+    bg_only        : 배경 그룹화만
+    bg_label       : 배경 + 크롭(라벨) 그룹화
+    bg_label_rep   : 배경 + 크롭 + 대표 간 재그룹화
+    """
+    valid = set(PIPELINE_CHOICES.values())
+
+    if args_pipeline and args_pipeline in valid:
+        print(f"  파이프라인   : {args_pipeline} (지정됨)")
+        return args_pipeline
+
+    print()
+    print("  ─── 파이프라인 선택 ─────────────────────────────")
+    print("  1) bg_only      : 배경 그룹화만")
+    print("  2) bg_label     : 배경 + 크롭(라벨) 그룹화")
+    print("  3) bg_label_rep : 배경 + 크롭 + 대표 간 재그룹화  [권장]")
+    print("  ──────────────────────────────────────────────────")
+
+    try:
+        user_input = input("  선택 (1/2/3, Enter=3): ").strip()
+    except (EOFError, KeyboardInterrupt):
+        print()
+        user_input = ""
+
+    pipeline = PIPELINE_CHOICES.get(user_input, 'bg_label_rep')
+    print(f"  파이프라인   : {pipeline}")
+    return pipeline
+
+
+# ──────────────────────────────────────────────
 # 워커 수 확인 인터랙티브
 # ──────────────────────────────────────────────
 def prompt_workers(args_workers):
@@ -838,6 +1078,15 @@ def run_grouper(args, log_fn=None):
         args.crop_threshold = args.threshold
     if getattr(args, 'retry_threshold', None) is None:
         args.retry_threshold = args.threshold * 2
+    if getattr(args, 'rep_threshold', None) is None:
+        args.rep_threshold = getattr(args, 'crop_threshold', args.threshold)
+
+    # 파이프라인 선택 (crop 미사용 시 bg_only 고정)
+    if not getattr(args, 'crop', False):
+        pipeline = 'bg_only'
+    else:
+        pipeline = prompt_pipeline(getattr(args, 'pipeline', None))
+    args.pipeline = pipeline
 
     start_time = time.time()
 
@@ -854,6 +1103,9 @@ def run_grouper(args, log_fn=None):
         log(f"  크롭 임계값 : {args.crop_threshold}")
         log(f"  크롭 패딩   : {args.padding}")
         log(f"  최소 크롭   : {args.min_crop_size}px")
+        log(f"  파이프라인  : {pipeline}")
+        if pipeline == 'bg_label_rep':
+            log(f"  대표 임계값 : {args.rep_threshold}")
     log(f"  워커 수     : {args.workers}")
     log("")
 
@@ -897,6 +1149,10 @@ def run_grouper(args, log_fn=None):
     report_data = {}
     output_path = Path(args.output)
     output_path.mkdir(parents=True, exist_ok=True)
+
+    # 파이프라인 단계별 공유 변수 초기화
+    bg_list_paths  = []   # background_list.txt 경로 목록
+    bg_final_unique = []  # 배경 unique 이미지 목록 (label_list 에 포함)
 
     # 단계 5) unlabeled 그룹화 처리
     if process_ul:
@@ -1000,6 +1256,18 @@ def run_grouper(args, log_fn=None):
 
             pbar.close()
 
+            # ── background_list.txt : 그룹 대표만 (unique 제외) ──
+            bg_rep_only = []
+            for g in bg_groups + bg_retry_groups:
+                rk, _ = select_representative(g, bg_hashes)
+                bg_rep_only.append(rk)
+            bg_list_paths = save_path_list(
+                bg_rep_only, args.output,
+                "background_list.txt",
+                "배경 그룹 대표 이미지 (unique 제외 → label_list.txt 에 포함)"
+            )
+
+            # 기존 호환 파일도 유지
             save_representative_list(
                 bg_groups, bg_retry_groups, bg_final_unique, bg_hashes,
                 args.output, "background_representative_list.txt"
@@ -1021,15 +1289,36 @@ def run_grouper(args, log_fn=None):
                 'hash_dict': bg_hashes
             }
 
-    # 단계 7) 클래스별 크롭 그룹화 처리
-    if process_crops:
+            # 배경 단계 전용 리포트
+            gen_report_background(
+                bg_groups, bg_retry_groups, bg_final_unique, bg_hashes,
+                args.output, args
+            )
+        else:
+            bg_list_paths = []
+            bg_final_unique = []
+
+    # 단계 7) 크롭(라벨) 그룹화 처리  (bg_label / bg_label_rep 파이프라인)
+    label_list_paths = []      # label_list.txt 에 들어갈 원본 경로
+    rep_crop_items   = []      # (crop_pil, source_key) — 대표 간 재그룹화용
+    rep_crop_paths   = {}      # source_key → original_img_path
+    label_class_data = {}      # gen_report_label 용 데이터
+    label_stem_to_path = {}    # 전체 stem→path 통합
+
+    if process_crops and pipeline in ('bg_label', 'bg_label_rep'):
         log("")
         log(f"=== 클래스별 객체 크롭 그룹화 ===")
 
         class_names = load_class_names(getattr(args, 'names', None))
         crops_by_class, stem_to_path = generate_crops(labeled_files, args.padding, args.min_crop_size)
+        label_stem_to_path = stem_to_path
         total_crops = sum(len(v) for v in crops_by_class.values())
         log(f"크롭 생성 완료: {total_crops:,}개 ({len(crops_by_class)}개 클래스)")
+
+        def _si_to_orig(si):
+            """source_key(imgXXX_objY) → 원본 이미지 경로"""
+            parts = si.rsplit('_obj', 1)
+            return stem_to_path.get(parts[0]) if len(parts) == 2 else None
 
         for cls_id in sorted(crops_by_class.keys()):
             cls_name = get_class_name(cls_id, class_names)
@@ -1037,6 +1326,13 @@ def run_grouper(args, log_fn=None):
 
             if len(items) < 2:
                 log(f"  [{cls_name}] {len(items)}개 → 건너뜀")
+                # 1개라도 unique로 label_list 에 추가
+                for _, si in items:
+                    parts = si.rsplit('_obj', 1)
+                    if len(parts) == 2:
+                        orig = stem_to_path.get(parts[0])
+                        if orig:
+                            label_list_paths.append(orig)
                 continue
 
             log(f"  [{cls_name}] {len(items):,}개 크롭 처리 중..")
@@ -1085,6 +1381,7 @@ def run_grouper(args, log_fn=None):
 
             pbar.close()
 
+            # 기존 호환 파일 유지
             save_crop_representative_list(
                 cr_groups, cr_retry_groups, cr_final_unique, crop_hashes,
                 stem_to_path, args.output,
@@ -1101,12 +1398,33 @@ def run_grouper(args, log_fn=None):
                 'retry_groups': cr_retry_groups, 'final_unique': cr_final_unique,
                 'hash_dict': crop_hashes
             }
+            label_class_data[cls_name] = {
+                'groups': cr_groups, 'retry_groups': cr_retry_groups,
+                'final_unique': cr_final_unique, 'hash_dict': crop_hashes,
+                'total_crops': len(items)
+            }
+
+            # label_list : 그룹 대표 원본 + unique 원본
+            for g in cr_groups + cr_retry_groups:
+                rk, _ = select_representative(g, crop_hashes)
+                orig = _si_to_orig(rk)
+                if orig:
+                    label_list_paths.append(orig)
+                # 대표 간 재그룹화용 수집
+                if pipeline == 'bg_label_rep':
+                    pil_img = crop_pil_map.get(rk)
+                    if pil_img:
+                        rep_crop_items.append((pil_img, rk))
+                        if orig:
+                            rep_crop_paths[rk] = orig
+
+            for si in cr_final_unique:
+                orig = _si_to_orig(si)
+                if orig:
+                    label_list_paths.append(orig)
 
             cr_all_rep_keys = []
-            for g in cr_groups:
-                rk, _ = select_representative(g, crop_hashes)
-                cr_all_rep_keys.append(rk)
-            for g in cr_retry_groups:
+            for g in cr_groups + cr_retry_groups:
                 rk, _ = select_representative(g, crop_hashes)
                 cr_all_rep_keys.append(rk)
             cr_all_rep_keys.extend(cr_final_unique)
@@ -1116,7 +1434,94 @@ def run_grouper(args, log_fn=None):
                 str(output_path / "crops" / f"{cls_name}_preview.jpg"), cls_name
             )
 
-    # 단계 8) 리포트 + 통합 목록 저장
+        # bg_final_unique 이미지도 label_list 에 추가
+        for fp in bg_final_unique:
+            label_list_paths.append(fp)
+
+        # label_list.txt 저장
+        label_list_paths_saved = save_path_list(
+            label_list_paths, args.output,
+            "label_list.txt",
+            "크롭 그룹 대표 + 크롭 unique + 배경 unique 원본 이미지"
+        )
+
+        # bg_label_list.txt = background_list + label_list (중복 제거)
+        bg_label_combined = sorted(set(bg_list_paths) | set(label_list_paths_saved))
+        save_path_list(
+            bg_label_combined, args.output,
+            "bg_label_list.txt",
+            "배경 그룹 대표 + 라벨 그룹 대표 + unique 통합 목록"
+        )
+        log(f"bg_label_list.txt : {len(bg_label_combined):,}개")
+
+        # 라벨 단계 전용 리포트
+        gen_report_label(label_class_data, len(bg_final_unique), args.output, args)
+
+    # 단계 8) 대표 간 재그룹화  (bg_label_rep 파이프라인)
+    if process_crops and pipeline == 'bg_label_rep' and rep_crop_items:
+        log("")
+        log(f"=== 대표 크롭 간 재그룹화 ({len(rep_crop_items):,}개) ===")
+
+        rep_hashes = compute_hashes_from_pil(rep_crop_items)
+        if rep_hashes:
+            cross_groups, cross_unique = do_grouping(
+                rep_hashes, args.rep_threshold, args.mode, "(representative)"
+            )
+            cross_groups.sort(key=len, reverse=True)
+            log(f"  재그룹 {len(cross_groups):,}개 / unique {len(cross_unique):,}개")
+
+            cross_retry_groups, cross_final_unique = [], cross_unique
+            if getattr(args, 'retry', False) and len(cross_unique) >= 2:
+                cross_retry_groups, cross_final_unique = retry_grouping_crops(
+                    cross_unique, rep_hashes,
+                    {si: img for img, si in rep_crop_items},
+                    args.retry_threshold, args.mode, "(representative)"
+                )
+
+            # representative_list.txt : 재그룹 대표 + unique 의 원본 경로
+            rep_list_paths = []
+            for g in cross_groups + cross_retry_groups:
+                rk, _ = select_representative(g, rep_hashes)
+                orig = rep_crop_paths.get(rk)
+                if orig:
+                    rep_list_paths.append(orig)
+            for si in cross_final_unique:
+                orig = rep_crop_paths.get(si)
+                if orig:
+                    rep_list_paths.append(orig)
+
+            rep_list_saved = save_path_list(
+                rep_list_paths, args.output,
+                "representative_list.txt",
+                "대표 크롭 간 재그룹화 후 최종 대표 원본 이미지"
+            )
+
+            # bg_label_rep_list.txt = bg_label_list + rep_list (중복 제거)
+            bg_label_saved = [
+                line.strip()
+                for line in open(output_path / "bg_label_list.txt", encoding='utf-8')
+                if line.strip() and not line.startswith('#')
+            ] if (output_path / "bg_label_list.txt").exists() else []
+            bg_label_rep_combined = sorted(set(bg_label_saved) | set(rep_list_saved))
+            save_path_list(
+                bg_label_rep_combined, args.output,
+                "bg_label_rep_list.txt",
+                "배경 + 라벨 + 대표 간 재그룹화 통합 목록 (최종 dedup)"
+            )
+            log(f"bg_label_rep_list.txt : {len(bg_label_rep_combined):,}개")
+
+            gen_report_representative(
+                cross_groups, cross_retry_groups, cross_final_unique,
+                len(rep_crop_items), args.output, args
+            )
+
+            report_data['representative'] = {
+                'groups': cross_groups, 'unique': cross_unique,
+                'retry_groups': cross_retry_groups, 'final_unique': cross_final_unique,
+                'hash_dict': rep_hashes
+            }
+
+    # 단계 9) 통합 리포트 + 통합 목록 저장
     elapsed = time.time() - start_time
     gen_report(report_data, args.output, args, elapsed)
 
@@ -1157,6 +1562,17 @@ def run_grouper(args, log_fn=None):
             line += f" / retry: {retry_g:,}개 ({retry_imgs:,}개)"
         line += f" / 고유: {final_u:,}개"
         log(line)
+
+    # 파이프라인별 결과 파일 안내
+    log("")
+    log("  생성된 목록 파일")
+    log(f"    background_list.txt         : 배경 그룹 대표")
+    if pipeline in ('bg_label', 'bg_label_rep'):
+        log(f"    label_list.txt              : 크롭 대표 + unique")
+        log(f"    bg_label_list.txt           : 배경 + 라벨 통합")
+    if pipeline == 'bg_label_rep':
+        log(f"    representative_list.txt     : 대표 간 재그룹화")
+        log(f"    bg_label_rep_list.txt       : 전체 통합 (최종)")
     log(f"  결과 디렉토리: {args.output}")
     log("=" * 60)
 
@@ -1192,6 +1608,12 @@ def main():
     parser.add_argument('--retry',          action='store_true', help='unique 이미지 재그룹화')
     parser.add_argument('--retry-threshold', type=int, default=None, dest='retry_threshold',
                         help='retry 유사도 임계값 (기본값: threshold * 2)')
+    parser.add_argument('--pipeline',
+                        choices=['bg_only', 'bg_label', 'bg_label_rep'], default=None,
+                        help='처리 파이프라인 선택 (없으면 대화식 선택): '
+                             'bg_only=배경만 / bg_label=배경+크롭 / bg_label_rep=배경+크롭+대표재그룹')
+    parser.add_argument('--rep-threshold',  type=int, default=None, dest='rep_threshold',
+                        help='대표 간 재그룹화 임계값 (기본값: crop_threshold와 동일)')
     parser.add_argument('-w', '--workers',  type=int, default=None,
                         help='병렬 워커 수 (기본값: CPU절반)')
     parser.add_argument('--images-dir-name', default='JPEGImages', dest='images_dir_name',
