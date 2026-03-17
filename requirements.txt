@@ -1,0 +1,7 @@
+# duplicate_grouper 필수 패키지
+# 설치: pip install -r requirements.txt
+
+Pillow>=9.0.0
+ImageHash>=4.3.0
+tqdm>=4.60.0
+PyQt5>=5.15.0

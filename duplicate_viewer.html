@@ -1,0 +1,693 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Duplicate Grouper Viewer</title>
+<style>
+@import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600;700&family=Syne:wght@700;800&display=swap');
+
+:root {
+  --bg:     #08080e;
+  --bg2:    #0f0f18;
+  --bg3:    #16161f;
+  --bg4:    #1e1e2a;
+  --border: #2a2a3a;
+  --accent: #7c6af7;
+  --accent2:#4ecdc4;
+  --warn:   #f7c948;
+  --text:   #e0e0f0;
+  --text2:  #8888aa;
+  --text3:  #55556a;
+  --rep:    #7c6af7;
+  --dup:    #4ecdc4;
+  --uniq:   #f7c948;
+  --radius: 8px;
+}
+
+* { box-sizing: border-box; margin: 0; padding: 0; }
+
+body {
+  background: var(--bg);
+  color: var(--text);
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 13px;
+  min-height: 100vh;
+}
+
+header {
+  background: var(--bg2);
+  border-bottom: 1px solid var(--border);
+  padding: 0 24px;
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  height: 52px;
+  position: sticky;
+  top: 0;
+  z-index: 100;
+}
+
+header h1 {
+  font-family: 'Syne', sans-serif;
+  font-size: 16px;
+  font-weight: 800;
+  color: var(--accent);
+  letter-spacing: 0.05em;
+  white-space: nowrap;
+}
+
+.header-meta { color: var(--text3); font-size: 11px; flex: 1; }
+
+.tabs {
+  display: flex;
+  gap: 2px;
+  background: var(--bg2);
+  border-bottom: 1px solid var(--border);
+  padding: 0 24px;
+  position: sticky;
+  top: 52px;
+  z-index: 99;
+}
+
+.tab-btn {
+  background: none;
+  border: none;
+  border-bottom: 2px solid transparent;
+  color: var(--text2);
+  cursor: pointer;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 12px;
+  padding: 10px 16px;
+  transition: all 0.15s;
+  white-space: nowrap;
+}
+
+.tab-btn:hover { color: var(--text); }
+.tab-btn.active { color: var(--accent); border-bottom-color: var(--accent); }
+
+.tab-badge {
+  background: var(--bg4);
+  border-radius: 10px;
+  color: var(--text3);
+  font-size: 10px;
+  margin-left: 6px;
+  padding: 1px 6px;
+}
+
+.tab-btn.active .tab-badge { background: var(--accent); color: #fff; }
+
+.toolbar {
+  align-items: center;
+  background: var(--bg2);
+  border-bottom: 1px solid var(--border);
+  display: flex;
+  gap: 10px;
+  padding: 8px 24px;
+  flex-wrap: wrap;
+}
+
+.toolbar-label { color: var(--text3); font-size: 11px; white-space: nowrap; }
+
+.stat-chip {
+  background: var(--bg3);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  color: var(--text2);
+  font-size: 11px;
+  padding: 3px 10px;
+  white-space: nowrap;
+}
+
+.stat-chip span { font-weight: 700; margin-right: 3px; }
+.stat-chip.rep  span { color: var(--rep); }
+.stat-chip.dup  span { color: var(--dup); }
+.stat-chip.uniq span { color: var(--uniq); }
+
+select {
+  background: var(--bg3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  color: var(--text);
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 12px;
+  outline: none;
+  padding: 4px 10px;
+  cursor: pointer;
+}
+
+select:focus { border-color: var(--accent); }
+
+.size-btns { display: flex; gap: 4px; margin-left: auto; }
+
+.size-btn {
+  background: var(--bg3);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  color: var(--text2);
+  cursor: pointer;
+  font-size: 11px;
+  padding: 3px 8px;
+  transition: all 0.1s;
+}
+
+.size-btn:hover, .size-btn.active {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+}
+
+.section-header {
+  align-items: center;
+  border-bottom: 1px solid var(--border);
+  display: flex;
+  gap: 12px;
+  padding: 10px 24px;
+  background: var(--bg3);
+  margin-top: 12px;
+}
+
+.section-title {
+  font-family: 'Syne', sans-serif;
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--text2);
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+
+.section-count { color: var(--text3); font-size: 11px; }
+
+.groups-container {
+  padding: 12px 24px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.group-row {
+  background: var(--bg2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  overflow: hidden;
+  transition: border-color 0.15s;
+}
+
+.group-row:hover { border-color: rgba(124,106,247,0.4); }
+.group-row.expanded { border-color: var(--accent); }
+
+.group-header {
+  align-items: center;
+  cursor: pointer;
+  display: flex;
+  gap: 12px;
+  padding: 8px 12px;
+  user-select: none;
+}
+
+.group-header:hover { background: var(--bg3); }
+
+.group-rep-thumb {
+  background: var(--bg4);
+  border-radius: 4px;
+  flex-shrink: 0;
+  object-fit: cover;
+  border: 2px solid rgba(124,106,247,0.5);
+  transition: border-color 0.1s;
+}
+
+.group-rep-thumb:hover { border-color: var(--rep); }
+
+.group-info { flex: 1; min-width: 0; }
+
+.group-id { color: var(--accent); font-size: 11px; font-weight: 600; }
+
+.group-filename {
+  color: var(--text2);
+  font-size: 11px;
+  margin-top: 2px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.group-stats { display: flex; gap: 6px; margin-top: 4px; }
+
+.badge {
+  border-radius: 3px;
+  font-size: 10px;
+  font-weight: 600;
+  padding: 1px 6px;
+}
+
+.badge-rep   { background: rgba(124,106,247,0.15); color: var(--rep); }
+.badge-dup   { background: rgba(78,205,196,0.15);  color: var(--dup); }
+.badge-total { background: var(--bg4); color: var(--text3); }
+
+.expand-icon {
+  color: var(--text3);
+  font-size: 12px;
+  transition: transform 0.2s;
+  flex-shrink: 0;
+}
+
+.group-row.expanded .expand-icon { transform: rotate(90deg); }
+
+.dup-panel { display: none; padding: 0 12px 12px; }
+.group-row.expanded .dup-panel { display: block; }
+
+.dup-grid { display: flex; flex-wrap: wrap; gap: 6px; }
+
+.thumb-wrap { position: relative; }
+
+.dup-thumb, .uniq-thumb {
+  background: var(--bg4);
+  border-radius: 4px;
+  cursor: zoom-in;
+  display: block;
+  object-fit: cover;
+  transition: border-color 0.1s, transform 0.1s;
+}
+
+.dup-thumb  { border: 1px solid var(--border); }
+.uniq-thumb { border: 1px solid rgba(247,201,72,0.25); }
+
+.dup-thumb:hover  { border-color: var(--dup);  transform: scale(1.04); }
+.uniq-thumb:hover { border-color: var(--uniq); transform: scale(1.04); }
+
+.thumb-label {
+  background: rgba(0,0,0,0.75);
+  border-radius: 0 0 4px 4px;
+  bottom: 0;
+  color: var(--text3);
+  font-size: 9px;
+  left: 0;
+  overflow: hidden;
+  padding: 2px 4px;
+  position: absolute;
+  right: 0;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.unique-grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 12px 24px;
+}
+
+.loading {
+  align-items: center;
+  color: var(--text3);
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  justify-content: center;
+  min-height: 300px;
+}
+
+.spinner {
+  animation: spin 1s linear infinite;
+  border: 2px solid var(--border);
+  border-radius: 50%;
+  border-top-color: var(--accent);
+  height: 32px;
+  width: 32px;
+}
+
+@keyframes spin { to { transform: rotate(360deg); } }
+
+.error-box {
+  background: rgba(247,72,72,0.08);
+  border: 1px solid rgba(247,72,72,0.3);
+  border-radius: var(--radius);
+  color: #f48;
+  margin: 24px;
+  padding: 16px 20px;
+  line-height: 1.8;
+}
+
+#lightbox {
+  align-items: center;
+  background: rgba(0,0,0,0.93);
+  display: none;
+  height: 100vh;
+  justify-content: center;
+  left: 0;
+  position: fixed;
+  top: 0;
+  width: 100vw;
+  z-index: 1000;
+  cursor: zoom-out;
+}
+
+#lightbox.active { display: flex; }
+
+#lightbox img {
+  max-height: 90vh;
+  max-width: 90vw;
+  object-fit: contain;
+  border-radius: 4px;
+  box-shadow: 0 0 80px rgba(124,106,247,0.25);
+}
+
+#lightbox-caption {
+  bottom: 20px;
+  color: var(--text2);
+  font-size: 11px;
+  left: 50%;
+  position: fixed;
+  text-align: center;
+  transform: translateX(-50%);
+  background: rgba(0,0,0,0.6);
+  padding: 4px 12px;
+  border-radius: 4px;
+}
+
+.empty-state {
+  align-items: center;
+  color: var(--text3);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 48px;
+}
+
+.empty-icon { font-size: 36px; }
+
+.pagination {
+  align-items: center;
+  display: flex;
+  gap: 6px;
+  justify-content: center;
+  padding: 16px;
+  flex-wrap: wrap;
+}
+
+.page-btn {
+  background: var(--bg3);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  color: var(--text2);
+  cursor: pointer;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 11px;
+  padding: 4px 10px;
+  transition: all 0.1s;
+}
+
+.page-btn:hover, .page-btn.active {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+}
+
+.page-btn:disabled { cursor: default; opacity: 0.3; pointer-events: none; }
+.page-info { color: var(--text3); font-size: 11px; }
+
+::-webkit-scrollbar { width: 6px; height: 6px; }
+::-webkit-scrollbar-track { background: var(--bg); }
+::-webkit-scrollbar-thumb { background: var(--bg4); border-radius: 3px; }
+::-webkit-scrollbar-thumb:hover { background: var(--border); }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>⬡ DUPLICATE VIEWER</h1>
+  <div class="header-meta" id="header-meta">로딩 중...</div>
+</header>
+
+<div class="tabs" id="tabs"></div>
+
+<div id="app">
+  <div class="loading">
+    <div class="spinner"></div>
+    <div>index.json 로딩 중...</div>
+  </div>
+</div>
+
+<div id="lightbox">
+  <img id="lightbox-img" src="" alt="">
+  <div id="lightbox-caption"></div>
+</div>
+
+<script>
+let INDEX = null;
+let currentTab = null;
+let thumbSize = 'md';
+let currentCropClass = null;
+
+const PAGE_SIZE = 100;
+let bgPage = 0, ulPage = 0, cropPage = 0;
+
+// ── 라이트박스 ──
+function openLightbox(src, caption) {
+  document.getElementById('lightbox-img').src = src;
+  document.getElementById('lightbox-caption').textContent = caption || '';
+  document.getElementById('lightbox').classList.add('active');
+}
+
+document.getElementById('lightbox').addEventListener('click', () => {
+  document.getElementById('lightbox').classList.remove('active');
+});
+
+document.addEventListener('keydown', e => {
+  if (e.key === 'Escape') document.getElementById('lightbox').classList.remove('active');
+});
+
+// ── 경로 → URL ──
+function imgUrl(p) { return 'data/' + p.replace(/\\/g, '/'); }
+
+// ── 썸네일 px ──
+const THUMB_PX  = { sm: 48,  md: 64,  lg: 96  };
+const DUP_PX    = { sm: 60,  md: 80,  lg: 110 };
+
+// ── 그룹 행 ──
+function renderGroupRow(g, prefix) {
+  const id      = `${prefix}__${g.id}`;
+  const fname   = g.representative ? g.representative.split('/').pop() : '?';
+  const px      = THUMB_PX[thumbSize];
+  const dpx     = DUP_PX[thumbSize];
+  const repUrl  = imgUrl(g.representative);
+
+  const dupItems = g.duplicates.map(d => {
+    const df = d.split('/').pop();
+    const du = imgUrl(d);
+    return `<div class="thumb-wrap">
+      <img class="dup-thumb" src="${du}" width="${dpx}" height="${dpx}"
+        loading="lazy" title="${df}"
+        onclick="openLightbox('${du}','${df}')">
+      <div class="thumb-label">${df}</div>
+    </div>`;
+  }).join('');
+
+  return `<div class="group-row" id="${id}">
+    <div class="group-header" onclick="toggleGroup('${id}')">
+      <img class="group-rep-thumb" src="${repUrl}"
+        width="${px}" height="${px}" loading="lazy" title="${fname}"
+        onclick="event.stopPropagation();openLightbox('${repUrl}','${fname}')">
+      <div class="group-info">
+        <div class="group-id">${g.id.replace(/_/g,' ').toUpperCase()}</div>
+        <div class="group-filename">${fname}</div>
+        <div class="group-stats">
+          <span class="badge badge-rep">대표 1</span>
+          <span class="badge badge-dup">중복 ${g.duplicates.length}</span>
+          <span class="badge badge-total">총 ${g.total}</span>
+        </div>
+      </div>
+      <span class="expand-icon">▶</span>
+    </div>
+    <div class="dup-panel">
+      <div class="dup-grid">${dupItems}</div>
+    </div>
+  </div>`;
+}
+
+function toggleGroup(id) {
+  const el = document.getElementById(id);
+  if (el) el.classList.toggle('expanded');
+}
+
+// ── 유니크 그리드 ──
+function renderUniqueGrid(items) {
+  if (!items || !items.length) return '';
+  const dpx = DUP_PX[thumbSize];
+  return items.map(u => {
+    const f = u.split('/').pop();
+    const url = imgUrl(u);
+    return `<div class="thumb-wrap">
+      <img class="uniq-thumb" src="${url}" width="${dpx}" height="${dpx}"
+        loading="lazy" title="${f}"
+        onclick="openLightbox('${url}','${f}')">
+      <div class="thumb-label">${f}</div>
+    </div>`;
+  }).join('');
+}
+
+// ── 통계 툴바 ──
+function renderStatBar(data, extraHtml = '') {
+  const allG    = (data.groups || []).concat(data.retry_groups || []);
+  const totalDup = allG.reduce((s, g) => s + (g.duplicates?.length || 0), 0);
+  return `<div class="toolbar">
+    <div class="stat-chip rep"><span>${allG.length}</span>그룹</div>
+    <div class="stat-chip dup"><span>${totalDup}</span>중복</div>
+    <div class="stat-chip uniq"><span>${data.total_unique || 0}</span>유니크</div>
+    <div class="stat-chip"><span>${data.total_images || 0}</span>전체</div>
+    ${extraHtml}
+    <div class="size-btns">
+      <button class="size-btn ${thumbSize==='sm'?'active':''}" onclick="setSize('sm')">S</button>
+      <button class="size-btn ${thumbSize==='md'?'active':''}" onclick="setSize('md')">M</button>
+      <button class="size-btn ${thumbSize==='lg'?'active':''}" onclick="setSize('lg')">L</button>
+    </div>
+  </div>`;
+}
+
+// ── 페이지네이션 ──
+function renderPagination(total, page, fn) {
+  const tp = Math.ceil(total / PAGE_SIZE);
+  if (tp <= 1) return '';
+  const s = Math.max(0, page - 2), e = Math.min(tp - 1, page + 2);
+  let b = `<button class="page-btn" ${page===0?'disabled':''} onclick="${fn}(${page-1})">◀</button>`;
+  if (s > 0) b += `<button class="page-btn" onclick="${fn}(0)">1</button><span class="page-info">…</span>`;
+  for (let i = s; i <= e; i++) b += `<button class="page-btn ${i===page?'active':''}" onclick="${fn}(${i})">${i+1}</button>`;
+  if (e < tp-1) b += `<span class="page-info">…</span><button class="page-btn" onclick="${fn}(${tp-1})">${tp}</button>`;
+  b += `<button class="page-btn" ${page===tp-1?'disabled':''} onclick="${fn}(${page+1})">▶</button>`;
+  b += `<span class="page-info">${page+1} / ${tp} (${total}그룹)</span>`;
+  return `<div class="pagination">${b}</div>`;
+}
+
+// ── 그룹 목록 (페이지) ──
+function renderGroupList(allGroups, page, prefix, pageFn) {
+  const slice = allGroups.slice(page * PAGE_SIZE, (page + 1) * PAGE_SIZE);
+  return `<div class="groups-container">${slice.map(g => renderGroupRow(g, prefix)).join('')}</div>
+    ${renderPagination(allGroups.length, page, pageFn)}`;
+}
+
+// ── 섹션 공통 렌더 ──
+function renderSection(data, prefix, pageFn, page) {
+  if (!data) return `<div class="empty-state"><div class="empty-icon">📭</div><div>데이터 없음</div></div>`;
+  const allGroups = (data.groups || []).concat(data.retry_groups || []);
+  let html = '';
+
+  if (allGroups.length > 0) {
+    html += `<div class="section-header">
+      <div class="section-title">Groups</div>
+      <div class="section-count">${allGroups.length}개 그룹</div>
+    </div>
+    ${renderGroupList(allGroups, page, prefix, pageFn)}`;
+  }
+
+  if (data.unique?.length > 0) {
+    html += `<div class="section-header">
+      <div class="section-title">Unique</div>
+      <div class="section-count">${data.unique.length}장</div>
+    </div>
+    <div class="unique-grid">${renderUniqueGrid(data.unique)}</div>`;
+  }
+
+  return html || `<div class="empty-state"><div class="empty-icon">📭</div><div>데이터 없음</div></div>`;
+}
+
+// ── 탭별 렌더 ──
+function renderBackground() {
+  return renderStatBar(INDEX.background || {}) + renderSection(INDEX.background, 'bg', 'setBgPage', bgPage);
+}
+
+function renderUnlabeled() {
+  return renderStatBar(INDEX.unlabeled || {}) + renderSection(INDEX.unlabeled, 'ul', 'setUlPage', ulPage);
+}
+
+function renderCrops() {
+  const crops = INDEX.crops || {};
+  const classes = Object.keys(crops).sort();
+  if (!classes.length) return `<div class="empty-state"><div class="empty-icon">📭</div><div>crop 데이터 없음</div></div>`;
+
+  if (!currentCropClass || !crops[currentCropClass]) currentCropClass = classes[0];
+  const data = crops[currentCropClass];
+
+  const opts = classes.map(c =>
+    `<option value="${c}" ${c===currentCropClass?'selected':''}>${c}  (${crops[c].total_images}장)</option>`
+  ).join('');
+
+  const extra = `<div class="toolbar-label">클래스:</div>
+    <select onchange="setCropClass(this.value)">${opts}</select>`;
+
+  return renderStatBar(data, extra) + renderSection(data, 'crop', 'setCropPage', cropPage);
+}
+
+// ── 탭 전환 ──
+function switchTab(tab) {
+  currentTab = tab;
+  document.querySelectorAll('.tab-btn').forEach(b => b.classList.toggle('active', b.dataset.tab === tab));
+  redraw();
+}
+
+function redraw() {
+  let html = '';
+  if (currentTab === 'background') html = renderBackground();
+  else if (currentTab === 'unlabeled') html = renderUnlabeled();
+  else if (currentTab === 'crops') html = renderCrops();
+  document.getElementById('app').innerHTML = html;
+}
+
+function setBgPage(p)   { bgPage   = p; redraw(); scrollTo(0,0); }
+function setUlPage(p)   { ulPage   = p; redraw(); scrollTo(0,0); }
+function setCropPage(p) { cropPage = p; redraw(); scrollTo(0,0); }
+
+function setCropClass(cls) { currentCropClass = cls; cropPage = 0; redraw(); }
+function setSize(s)        { thumbSize = s; redraw(); }
+
+// ── 탭 초기화 ──
+function initTabs() {
+  const defs = [];
+  if (INDEX.background) {
+    const g = (INDEX.background.groups?.length||0) + (INDEX.background.retry_groups?.length||0);
+    defs.push({ id: 'background', label: 'Background', count: g });
+  }
+  if (INDEX.unlabeled) {
+    const g = (INDEX.unlabeled.groups?.length||0) + (INDEX.unlabeled.retry_groups?.length||0);
+    defs.push({ id: 'unlabeled', label: 'Unlabeled', count: g });
+  }
+  if (INDEX.crops && Object.keys(INDEX.crops).length) {
+    const t = Object.values(INDEX.crops).reduce((s,c) => s + (c.total_groups||0), 0);
+    defs.push({ id: 'crops', label: 'Crops', count: t });
+  }
+
+  document.getElementById('tabs').innerHTML = defs.map(d =>
+    `<button class="tab-btn" data-tab="${d.id}" onclick="switchTab('${d.id}')">
+      ${d.label}<span class="tab-badge">${d.count}</span>
+    </button>`
+  ).join('');
+
+  if (defs.length) switchTab(defs[0].id);
+}
+
+// ── 초기 로드 ──
+async function init() {
+  try {
+    const res = await fetch('/api/index.json');
+    if (!res.ok) throw new Error(`서버 응답 오류: HTTP ${res.status}`);
+    INDEX = await res.json();
+
+    const meta = [];
+    if (INDEX.generated)  meta.push(INDEX.generated);
+    if (INDEX.result_dir) meta.push(INDEX.result_dir);
+    document.getElementById('header-meta').textContent = meta.join('  ·  ');
+
+    initTabs();
+  } catch (e) {
+    document.getElementById('app').innerHTML = `
+      <div class="error-box">
+        <strong>로드 실패:</strong> ${e.message}<br><br>
+        viewer_server.py 가 실행 중인지 확인하세요.<br><br>
+        <code>python viewer_server.py -r ./duplication_test</code>
+      </div>`;
+  }
+}
+
+init();
+</script>
+</body>
+</html>
